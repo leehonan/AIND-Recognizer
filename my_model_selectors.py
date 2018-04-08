@@ -1,7 +1,6 @@
 import math
 import statistics
 import warnings
-
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
@@ -74,15 +73,52 @@ class SelectorBIC(ModelSelector):
 
         :return: GaussianHMM object
         """
+        # TODO implement model selection based on BIC scores
+
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        lowest_bic_score = float('inf')   # lowest wins
+        best_hmm_model = None
+        log_n = np.log(len((self.lengths)))
+        num_features = self.X.shape[1]
+
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                # get HMM
+                hmm_model = self.base_model(num_states).fit(self.X, self.lengths)
+
+                # calculate log likelihood
+                log_l = hmm_model.score(self.X, self.lengths)
+
+                # calculate number of free params given transition probabilities and emission
+                # probabilities
+
+                # NOTE: below changed per review feedback
+                # num_params = num_states + (num_states * (num_states - 1)) + (num_states * num_features * 2)
+                # taking it that number of free parameters (p) = m^2 +2mf-1, where:
+                #       m is num_states/components
+                #       f is num_features
+                num_params = (num_states ** 2) + (2 * num_states * num_features) - 1
+
+                # change end
+
+                # calculate BIC score => -2 * logL + p * logN
+                bic_score = -2 * log_l + num_params * log_n
+
+            except:
+                continue
+
+            # update lowest score/ best model
+            if bic_score < lowest_bic_score:
+                lowest_bic_score = bic_score
+                best_hmm_model = hmm_model
+
+        return best_hmm_model
 
 
 class SelectorDIC(ModelSelector):
-    ''' select best model based on Discriminative Information Criterion
-
+    '''
+    select best model based on Discriminative Information Criterion
     Biem, Alain. "A model selection criterion for classification: Application to hmm topology optimization."
     Document Analysis and Recognition, 2003. Proceedings. Seventh International Conference on. IEEE, 2003.
     http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.58.6208&rep=rep1&type=pdf
@@ -91,10 +127,50 @@ class SelectorDIC(ModelSelector):
     '''
 
     def select(self):
+        # TODO implement model selection based on DIC scores
+        '''
+        Unlike BIC, DIC takes goal into account; where
+            DIC = log(P(X(i)) - (1/(M-1) * SUM(log(P(X(all but i)))
+                        M is number of words
+                        log(P(X(i)) = logL(i) -> likelihood
+                        log(P(X(all but i) is logL(i) bar entry state -> anti-likelihood
+                        anti-likelihood is averaged before being subtracted from likelihood
+        '''
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        highest_dic_score = float('-inf')   # highest wins
+        best_hmm_model = None
+
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                # get HMM
+                hmm_model = self.base_model(num_states).fit(self.X, self.lengths)
+
+                # calculate log likelihood for current model
+                log_l = hmm_model.score(self.X, self.lengths)
+
+                # init anti log_l, word_count for words
+                anti_log_l_sum = 0.0
+                word_count = 0
+
+                for word in self.hwords:
+                    if word != self.this_word:
+                        word_x, word_lengths = self.hwords[word]
+                        anti_log_l_sum += hmm_model.score(word_x, word_lengths)
+                        word_count += 1      # will be M - 1 as this_word not counted
+
+                # calculate DIC score (estimate) for current model
+                dic_score = log_l - (anti_log_l_sum / float(word_count))
+
+            except:
+                continue
+
+            # update lowest score/ best model
+            if dic_score > highest_dic_score:
+                highest_dic_score = dic_score
+                best_hmm_model = hmm_model
+
+        return best_hmm_model
 
 
 class SelectorCV(ModelSelector):
@@ -103,7 +179,56 @@ class SelectorCV(ModelSelector):
     '''
 
     def select(self):
+        # TODO implement model selection using CV
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        highest_cv_score = float('-inf')   # highest wins
+        best_hmm_model = None
+
+        # ensure there are enough sequences to fold
+        if len(self.sequences) < 2:
+            return None
+        else:
+            k_fold = KFold(n_splits=2)
+
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            log_l_sum = 0
+            states_counter = 0
+
+            # Iterate sequences
+            for cv_train_idx, cv_test_idx in k_fold.split(self.sequences):
+                try:
+                    # get train and test sequences
+                    cross_train, lengths_train = combine_sequences(cv_train_idx, self.sequences)
+                    cross_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+
+                    # get HMM for training sequence
+                    hmm_model = self.base_model(num_states).fit(cross_train, lengths_train)
+
+                    # calculate log likelihood for current model (test)
+                    log_l = hmm_model.score(cross_test, lengths_test)
+
+                    # increment divisor for cv score
+                    states_counter += 1
+
+                except:
+                    log_l = 0
+
+                log_l_sum += log_l
+
+            # Calculate CV score
+            cv_score = log_l_sum if states_counter == 0 else (log_l_sum / states_counter)
+
+            # update lowest score/ best model
+            if cv_score > highest_cv_score:
+                highest_cv_score = cv_score
+                best_hmm_model = hmm_model
+
+        return best_hmm_model
+
+
+if __name__=="__main__":
+    from asl_test_model_selectors import TestSelectors
+    import unittest
+    suite = unittest.TestLoader().loadTestsFromModule(TestSelectors())
+    unittest.TextTestRunner().run(suite)
